@@ -1,0 +1,67 @@
+# Production stack. Bring up with:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Three services: Postgres, the API (which also runs the meeting bots in-process), and
+# the Next.js dashboard. Put a TLS-terminating reverse proxy (nginx/Caddy/Traefik) in
+# front of `api` and `web` — session cookies are Secure in production and will not be
+# sent over plain HTTP.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-meetingmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:-meetingmind}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-meetingmind}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not published: only the API needs it. Expose it only if you must connect remotely.
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.api
+    restart: unless-stopped
+    env_file: [.env.production]
+    environment:
+      # Overrides the .env value: inside the network the host is `db`, not localhost.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-meetingmind}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-meetingmind}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Chromium maps its renderer heap into /dev/shm. Docker's 64MB default makes tabs
+    # die under load, which shows up as bots mysteriously dropping out of meetings.
+    shm_size: "1gb"
+    volumes:
+      - recordings:/app/recordings
+      # The bot's signed-in Google session. Losing this means logging the bot account
+      # back in by hand (and fighting Google's challenge flow), so it is a volume.
+      - bot_profile:/app/bot_profile
+      - bot_profile_slots:/app/bot_profile_slots
+    ports:
+      - "127.0.0.1:8000:8000" # bind to loopback; the reverse proxy fronts it
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.web
+      args:
+        # Baked into the client bundle at build time — must be the API's PUBLIC origin,
+        # i.e. what a browser can reach, not the compose service name.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set NEXT_PUBLIC_API_URL, e.g. https://api.blostem.com}
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata:
+  recordings:
+  bot_profile:
+  bot_profile_slots:

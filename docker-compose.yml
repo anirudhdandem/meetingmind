@@ -1,0 +1,22 @@
+# Local dev dependencies. Run: docker compose up -d
+# Brings up Postgres with the pgvector extension preinstalled.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: meetingmind-db
+    environment:
+      POSTGRES_USER: meetingmind
+      POSTGRES_PASSWORD: meetingmind
+      POSTGRES_DB: meetingmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - meetingmind_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meetingmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  meetingmind_pgdata:

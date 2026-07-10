@@ -1,0 +1,40 @@
+# --- Web / API ---
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+
+# --- Database ---
+sqlalchemy[asyncio]
+asyncpg
+alembic
+pgvector
+
+# --- LiveKit + STT ---
+livekit
+livekit-agents
+livekit-plugins-deepgram
+
+# --- Meeting bot (Google Meet automation) ---
+playwright
+
+# --- LLM + embeddings (Gemini) ---
+google-genai
+
+# --- Google Meet REST API (post-meeting transcripts via service account) ---
+google-auth
+
+# --- Auth (password login + emailed one-time code) ---
+argon2-cffi          # Argon2id password + one-time-code hashing
+email-validator      # pydantic EmailStr
+# Codes are mailed with the stdlib's smtplib, off the event loop — no client needed.
+
+# --- Utils ---
+python-dotenv
+httpx
+tenacity
+
+# --- Dev / test ---
+pytest
+pytest-asyncio
+ruff

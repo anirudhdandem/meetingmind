@@ -1,0 +1,55 @@
+# MeetingMind API — and, in the same process, the meeting bots.
+#
+# `app/bot/manager.py` runs each bot as an asyncio task on the API's event loop, so this
+# one image carries the whole capture stack: Chromium (headful), Xvfb to give it a screen
+# that doesn't exist, and PulseAudio to record what it plays.
+#
+# The browser is NOT headless on purpose — Meet detects that, and a headless Chromium
+# opens no PulseAudio sink-input for `audio_capture` to record. Xvfb is what makes it
+# invisible. See app/bot/display.py.
+
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # Browsers outside $HOME so a non-root user can reach them.
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    # PulseAudio refuses to start without one.
+    XDG_RUNTIME_DIR=/tmp/runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb \
+        pulseaudio pulseaudio-utils \
+        procps \
+        curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Deps first: this layer survives every source edit.
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Installs the Chromium build matching the pinned Playwright, plus its shared libs.
+RUN playwright install --with-deps chromium
+
+COPY backend/ /app/
+COPY infra/entrypoint-api.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Run unprivileged. The mount points are created and chowned here so Docker's named
+# volumes inherit this ownership when they're first populated.
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /app/recordings /app/bot_profile /app/bot_profile_slots "$XDG_RUNTIME_DIR" \
+    && chmod 700 "$XDG_RUNTIME_DIR" \
+    && chown -R appuser:appuser /app /ms-playwright "$XDG_RUNTIME_DIR"
+
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

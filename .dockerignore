@@ -1,0 +1,42 @@
+# The build context is the repo root (both Dockerfiles need backend/ or frontend/).
+# Everything below would otherwise be uploaded to the daemon on every build — the bot
+# profiles alone are ~340MB, and .env would be baked into an image layer.
+
+.git/
+.gitignore
+
+# Secrets — never into an image. Supplied at runtime via env_file.
+.env
+.env.*
+!.env.production.example
+
+# Bot Google session + captured audio: runtime state, mounted as volumes.
+backend/bot_profile/
+backend/bot_profile_slots/
+backend/recordings/
+backend/captures/
+bot_auth.json
+*.auth.json
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+.venv/
+venv/
+
+# Node / Next — reinstalled and rebuilt inside the image
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Local-only
+docker-compose.yml
+docs/
+README.md
+*.log
+.DS_Store
+.vscode/
+.idea/

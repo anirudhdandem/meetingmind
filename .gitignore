@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# --- Node / frontend ---
+node_modules/
+.next/
+dist/
+build/
+*.log
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- Runtime artifacts ---
+*.sqlite3
+recordings/
+captures/
+
+# --- Bot Google profile / session (treat as a secret) ---
+bot_profile/
+# Per-bot clones of the master profile — each carries the same Google session cookies.
+bot_profile_slots/
+bot_auth.json
+*.auth.json
