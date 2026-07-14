@@ -10,7 +10,7 @@ from app.api.deps import require_user
 from app.api.routes import auth, calls, comparison, oauth, retrieval, settings, team, webhooks
 from app.config import get_settings
 from app.core.logging import configure_logging, get_logger
-from app.services import auto_join
+from app.services import auto_join, call_processor
 
 log = get_logger(__name__)
 
@@ -25,6 +25,11 @@ async def lifespan(app: FastAPI):
         )
     log.info("MeetingMind API starting up")
 
+    # Calls orphaned by the previous process (crash / redeploy mid-meeting) get
+    # summarized or failed now, unprompted — in the background, since a salvage
+    # runs the whole transcription+LLM pipeline and must not delay startup.
+    recovery_task = asyncio.create_task(call_processor.recover_interrupted_calls())
+
     # Calendar auto-join runs inside the API process (like the bots themselves —
     # the manager's registry is in-memory, and prod runs a single worker).
     stop_auto_join = asyncio.Event()
@@ -36,6 +41,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    recovery_task.cancel()
+    try:
+        await recovery_task
+    except asyncio.CancelledError:
+        pass
     if auto_join_task is not None:
         stop_auto_join.set()
         auto_join_task.cancel()

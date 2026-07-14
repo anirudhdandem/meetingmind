@@ -393,3 +393,60 @@ async def process_call(
     await session.commit()
     log.info("process_call: completed call %s", call_id)
     return mom
+
+
+async def recover_interrupted_calls() -> None:
+    """Finish calls orphaned by a crash or restart — no meeting waits on a human.
+
+    At startup no bot can be running (the manager's registry is in-memory), so
+    every call still marked scheduled/in_progress is an orphan from the previous
+    process. Anything with audio on disk gets the full pipeline — a partial
+    recording still yields minutes; the rest are marked failed. Auto-join events
+    tied to those calls go back to pending when the meeting could still be in
+    progress, so the poller sends a fresh bot within a tick.
+    """
+    from app.core.db import SessionLocal  # local import: avoid module-load cycles
+    from app.models import calendar_event as ce
+    from app.models.calendar_event import CalendarEvent
+
+    async with SessionLocal() as db:
+        stale = (
+            await db.execute(
+                select(Call).where(
+                    Call.status.in_((CallStatus.scheduled, CallStatus.in_progress))
+                )
+            )
+        ).scalars().all()
+        if not stale:
+            return
+        log.warning("recovering %d call(s) interrupted by a restart", len(stale))
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        for call in stale:
+            call_id = call.id
+            try:
+                if recording_path(call_id).exists():
+                    await process_call(db, call_id)  # ends completed (or failed)
+                else:
+                    call.status = CallStatus.failed
+                    call.ended_at = call.ended_at or now
+                    await db.commit()
+            except Exception:
+                log.exception("recovery failed for call %s", call_id)
+                await db.rollback()  # keep the session usable for the next orphan
+                continue
+
+            # If its meeting may still be running, hand it back to the poller.
+            events = (
+                await db.execute(
+                    select(CalendarEvent).where(
+                        CalendarEvent.call_id == call_id,
+                        CalendarEvent.status == ce.DISPATCHED,
+                    )
+                )
+            ).scalars().all()
+            for ev in events:
+                if ev.end_at is None or ev.end_at > now:
+                    ev.status, ev.call_id = ce.PENDING, None
+                    ev.note = "re-queued after a server restart"
+            await db.commit()

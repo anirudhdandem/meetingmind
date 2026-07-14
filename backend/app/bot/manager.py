@@ -15,7 +15,7 @@ from app.bot.runner import run_bot_for_call
 from app.config import get_settings
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
-from app.services.call_processor import process_call
+from app.services.call_processor import process_call, recording_path
 
 log = get_logger(__name__)
 
@@ -42,6 +42,15 @@ async def _run(call_id: uuid.UUID, stop_event: asyncio.Event) -> None:
         await run_bot_for_call(call_id, stop_event=stop_event)
     except Exception:
         log.exception("bot task crashed for call %s", call_id)
+        # A crash must not cost the meeting its minutes: whatever audio reached
+        # disk before the crash still gets the full pipeline (idempotent, and a
+        # no-op when nothing was recorded — the call just stays failed).
+        try:
+            if recording_path(call_id).exists():
+                async with SessionLocal() as db:
+                    await process_call(db, call_id)
+        except Exception:
+            log.exception("post-crash summarization failed for call %s", call_id)
     finally:
         _tasks.pop(call_id, None)
         _stops.pop(call_id, None)
