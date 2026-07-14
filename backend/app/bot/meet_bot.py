@@ -336,16 +336,32 @@ class MeetBot:
                 continue
         raise RuntimeError("Could not find a join button on the Meet page")
 
+    # Any of these signals "we are inside the call". Meet's UI varies (A/B rollouts,
+    # compact layouts collapse the toolbar behind a "Call controls" overflow), so
+    # admission and removal detection MUST use the same list — checking a narrower
+    # set on removal is how the bot once left every meeting 10s after joining.
+    _IN_CALL_CONTROLS = ("Leave call", "End call", "Call controls")
+
+    async def _sees_in_call_controls(self, page: Page) -> str | None:
+        """The first visible in-call control's label, or None when none are found."""
+        for label in self._IN_CALL_CONTROLS:
+            try:
+                if await page.get_by_role("button", name=label).first.is_visible(
+                    timeout=500
+                ):
+                    return label
+            except Exception:
+                pass
+        return None
+
     async def _wait_until_admitted(self, page: Page, timeout: float) -> None:
         """Poll for an in-call control (e.g. 'Leave call') signalling admission."""
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
-            for label in ("Leave call", "Call controls"):
-                try:
-                    if await page.get_by_role("button", name=label).is_visible():
-                        return
-                except Exception:
-                    pass
+            label = await self._sees_in_call_controls(page)
+            if label is not None:
+                log.info("Admission detected via %r control", label)
+                return
             await asyncio.sleep(2)
         raise TimeoutError("Bot was not admitted before timeout (host must let it in)")
 
@@ -378,17 +394,26 @@ class MeetBot:
                         return
                 except Exception:
                     pass
-            try:
-                visible = await page.get_by_role("button", name="Leave call").first.is_visible(
-                    timeout=500
-                )
-            except Exception:
-                visible = False
+            # Same control set as admission — see _IN_CALL_CONTROLS. Several
+            # consecutive misses guard against dialogs/animations briefly covering
+            # the toolbar; a real removal also shows one of the texts above.
+            visible = await self._sees_in_call_controls(page) is not None
             misses = 0 if visible else misses + 1
-            if misses >= 2:
-                log.info("In-call control gone; assuming bot was removed")
+            if misses >= 4:
+                await self._debug_snapshot(page, "removed-detector")
+                log.info("In-call controls gone for %d polls; assuming bot was removed", misses)
                 return
             await asyncio.sleep(poll)
+
+    async def _debug_snapshot(self, page: Page, tag: str) -> None:
+        """Best-effort screenshot + URL log, for post-mortems of detector decisions."""
+        try:
+            log.info("debug snapshot (%s): url=%s title=%r", tag, page.url, await page.title())
+            path = os.path.join(get_settings().recordings_dir, f"debug-{tag}.png")
+            await page.screenshot(path=path, timeout=3000)
+            log.info("debug snapshot saved -> %s", path)
+        except Exception:
+            log.debug("debug snapshot failed", exc_info=True)
 
     async def _open_people_panel(self, page: Page) -> None:
         """Open the People/roster side panel if it isn't already open (best-effort)."""
