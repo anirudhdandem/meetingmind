@@ -1,5 +1,6 @@
 """FastAPI application entrypoint: wires routers, lifespan, CORS, auth."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -9,6 +10,7 @@ from app.api.deps import require_user
 from app.api.routes import auth, calls, comparison, oauth, retrieval, settings, team, webhooks
 from app.config import get_settings
 from app.core.logging import configure_logging, get_logger
+from app.services import auto_join
 
 log = get_logger(__name__)
 
@@ -22,7 +24,25 @@ async def lifespan(app: FastAPI):
             "Never run a deployed server this way."
         )
     log.info("MeetingMind API starting up")
+
+    # Calendar auto-join runs inside the API process (like the bots themselves —
+    # the manager's registry is in-memory, and prod runs a single worker).
+    stop_auto_join = asyncio.Event()
+    auto_join_task = (
+        asyncio.create_task(auto_join.run_loop(stop_auto_join))
+        if get_settings().auto_join_enabled
+        else None
+    )
+
     yield
+
+    if auto_join_task is not None:
+        stop_auto_join.set()
+        auto_join_task.cancel()
+        try:
+            await auto_join_task
+        except asyncio.CancelledError:
+            pass
     log.info("MeetingMind API shutting down")
 
 

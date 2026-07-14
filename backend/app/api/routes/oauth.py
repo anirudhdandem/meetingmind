@@ -42,6 +42,12 @@ async def google_status(
         "configured": oauth.is_configured(),
         "connected": cred is not None,
         "email": cred.email if cred else None,
+        # Calendar auto-join needs the bot connection to carry calendar.readonly.
+        # A bot account connected before that scope existed reports False here —
+        # the Settings page uses it to ask for a one-time reconnect.
+        "has_calendar_scope": bool(
+            cred and cred.scopes and "auth/calendar.readonly" in cred.scopes
+        ),
     }
 
 

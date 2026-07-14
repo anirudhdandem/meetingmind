@@ -12,6 +12,7 @@ from app.bot.audio_capture import CHANNELS, SAMPLE_RATE, PulseAudioCapture
 from app.bot.livekit_publisher import LiveKitPublisher
 from app.bot.meet_bot import MeetBot
 from app.bot.speaker_tracker import RecordingClock, track_active_speakers
+from app.config import get_settings
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
 from app.models.call import Call, CallStatus
@@ -69,7 +70,14 @@ async def run_bot_for_call(
         # audio is routed into it.
         await capture.setup()
         await publisher.connect()
-        await bot.join()
+        try:
+            await bot.join(admit_timeout=get_settings().bot_admit_timeout_seconds)
+        except TimeoutError:
+            # Nobody let the bot in (cancelled meeting / no-show / ignored knock).
+            # Not a crash — mark it failed quietly and free the slot.
+            log.info("Bot gave up on call %s: not admitted within the timeout", call_id)
+            await _set_status(call_id, CallStatus.failed, ended=True)
+            return
         await _set_status(call_id, CallStatus.in_progress, started=True)
 
         log.info("Streaming meeting audio for call %s -> room %s (until removed)", call_id, room)
@@ -136,9 +144,17 @@ async def run_bot_for_call(
                 publisher_task.cancel()
                 await asyncio.gather(recorder, publisher_task, return_exceptions=True)
 
+        # An auto-joined meeting may simply never happen (or everyone leaves and
+        # forgets the bot). A roster that keeps showing only the bot itself for
+        # this long ends the session and frees the slot; failed/empty roster
+        # reads don't count, so a broken selector can't cut a real meeting short.
+        alone_event = asyncio.Event()
+        alone_timeout = get_settings().bot_alone_timeout_seconds
+
         # Periodically read the Meet roster so attendees come from the real participant
         # list, not from diarization guesses.
         async def _track_roster() -> None:
+            alone_since: float | None = None
             while True:
                 try:
                     names = await bot.get_participants()
@@ -150,12 +166,26 @@ async def run_bot_for_call(
                                 if merged != (c.participants or []):
                                     c.participants = merged
                                     await db.commit()
+                    if alone_timeout > 0 and names:
+                        now = asyncio.get_running_loop().time()
+                        if len(names) <= 1:  # just the bot in the roster
+                            alone_since = alone_since if alone_since is not None else now
+                            if now - alone_since >= alone_timeout:
+                                log.info(
+                                    "bot alone in meeting for %ss — leaving call %s",
+                                    alone_timeout, call_id,
+                                )
+                                alone_event.set()
+                                return
+                        else:
+                            alone_since = None
                 except Exception:
                     log.debug("roster capture failed", exc_info=True)
                 await asyncio.sleep(20)
 
-        # Stay in the meeting and keep streaming until the host kicks the bot out
-        # (or the audio stream dies). The bot does NOT leave on its own.
+        # Stay in the meeting and keep streaming until the host kicks the bot out,
+        # the audio stream dies, or the alone-timeout fires. The bot never leaves
+        # a meeting that still has people in it.
         stream_task = asyncio.create_task(_stream())
         removed_task = asyncio.create_task(bot.wait_until_removed())
         roster_task = asyncio.create_task(_track_roster())
@@ -169,7 +199,7 @@ async def run_bot_for_call(
         route_task = asyncio.create_task(
             capture.route_loop(pid_provider=bot.browser_pids)
         )
-        wait_for = {stream_task, removed_task}
+        wait_for = {stream_task, removed_task, asyncio.create_task(alone_event.wait())}
         if stop_event is not None:
             wait_for.add(asyncio.create_task(stop_event.wait()))
         _, pending = await asyncio.wait(wait_for, return_when=asyncio.FIRST_COMPLETED)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
+from app.models.calendar_event import CalendarEvent
 from app.models.call import Call, CallStatus
 from app.models.company import Company
 from app.models.embedding import CompanyMemory
@@ -20,6 +22,7 @@ from app.models.transcript import CallTranscript
 from app.schemas.analysis import MetricsOut, MomOut, OutcomeOut, ScoreOut
 from app.schemas.calls import (
     AssignCompany,
+    CalendarEventOut,
     CallCreate,
     CallOut,
     CallStart,
@@ -209,6 +212,26 @@ async def _gc_company(db: AsyncSession, company_id: uuid.UUID) -> None:
 @router.get("/calls", response_model=list[CallOut])
 async def list_calls(db: AsyncSession = Depends(get_session)):
     rows = (await db.execute(select(Call).order_by(Call.created_at.desc()))).scalars().all()
+    return rows
+
+
+@router.get("/calls/auto-join", response_model=list[CalendarEventOut])
+async def auto_join_schedule(db: AsyncSession = Depends(get_session)):
+    """The auto-join schedule: meetings found on the bot's calendar, recent first-up.
+
+    Users invite the bot's email to a meeting and it appears here; a bot is
+    dispatched automatically when the meeting starts (see services/auto_join).
+    Declared before /calls/{call_id} so the literal path wins the route match.
+    """
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=12)
+    rows = (
+        await db.execute(
+            select(CalendarEvent)
+            .where(CalendarEvent.start_at >= since)
+            .order_by(CalendarEvent.start_at)
+            .limit(50)
+        )
+    ).scalars().all()
     return rows
 
 

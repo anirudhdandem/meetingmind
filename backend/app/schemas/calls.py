@@ -77,6 +77,25 @@ class CallOut(BaseModel):
     created_at: datetime.datetime
 
 
+class CalendarEventOut(BaseModel):
+    """A meeting discovered on the bot's calendar — the auto-join schedule."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    google_event_id: str
+    title: str | None
+    organizer_email: str | None
+    meet_code: str
+    meeting_url: str
+    start_at: datetime.datetime
+    end_at: datetime.datetime | None
+    # pending | dispatched | missed | skipped | cancelled
+    status: str
+    note: str | None
+    call_id: uuid.UUID | None
+    created_at: datetime.datetime
+
+
 class TranscriptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

@@ -249,13 +249,30 @@ function GoogleAccountCard({
             and <span className="font-mono">GOOGLE_OAUTH_CLIENT_SECRET</span> to the backend env.
           </p>
         ) : st?.connected ? (
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-ink">
-              Connected as <span className="font-medium">{st.email}</span>
-            </span>
-            <Button variant="ghost" onClick={disconnect} disabled={busy}>
-              {busy ? "Disconnecting…" : "Disconnect"}
-            </Button>
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm text-ink">
+                Connected as <span className="font-medium">{st.email}</span>
+              </span>
+              <Button variant="ghost" onClick={disconnect} disabled={busy}>
+                {busy ? "Disconnecting…" : "Disconnect"}
+              </Button>
+            </div>
+            {purpose === "bot" && !st.has_calendar_scope && (
+              <p className="text-sm text-warning">
+                This connection was made before calendar auto-join existed, so the bot can’t
+                see its meeting invites yet.{" "}
+                <button
+                  className="font-medium underline underline-offset-2"
+                  onClick={() =>
+                    (window.location.href = `${BASE}/oauth/google/start?purpose=bot`)
+                  }
+                >
+                  Reconnect once
+                </button>{" "}
+                to grant calendar access — then invited meetings are joined automatically.
+              </p>
+            )}
           </div>
         ) : (
           <Button
@@ -500,8 +517,10 @@ export default function SettingsPage() {
             connectLabel="Connect Google Calendar"
             description={
               <>
-                Connect a calendar to also detect sides from meeting invites by email domain.
-                Backup for meetings where participant identity isn’t available.
+                Connect your calendar and the bot auto-joins <em>every</em> Meet meeting on it —
+                no invite needed. Heads-up: when the bot isn&apos;t an invited guest it knocks and
+                waits to be let in (it gives up after a few minutes if nobody admits it). Also
+                used to detect sides from invites by email domain.
               </>
             }
           />

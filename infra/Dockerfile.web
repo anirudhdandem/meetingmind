@@ -17,7 +17,9 @@ COPY frontend/ ./
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
-RUN npm run build
+# Next.js only emits public/ into the image if the app has one; this repo has no
+# static assets yet, and the runner stage's COPY fails outright on a missing path.
+RUN mkdir -p public && npm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app

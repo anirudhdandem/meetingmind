@@ -19,11 +19,15 @@ log = get_logger(__name__)
 BASE = "https://www.googleapis.com/calendar/v3"
 
 
-async def list_events(access_token: str, time_min: str, time_max: str) -> list[dict]:
+async def list_events(
+    access_token: str, time_min: str, time_max: str, *, show_deleted: bool = False
+) -> list[dict]:
     """Events on the token owner's primary calendar within [time_min, time_max].
 
     Both bounds are RFC3339 timestamps. `singleEvents` expands recurring events so
-    each occurrence carries its own conference data / attendees.
+    each occurrence carries its own conference data / attendees. `show_deleted`
+    includes cancelled events (status="cancelled") — the auto-join poller needs
+    them to un-schedule a bot when a meeting is cancelled.
     """
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.get(
@@ -34,6 +38,7 @@ async def list_events(access_token: str, time_min: str, time_max: str) -> list[d
                 "singleEvents": "true",
                 "orderBy": "startTime",
                 "maxResults": 100,
+                "showDeleted": "true" if show_deleted else "false",
             },
             headers={"Authorization": f"Bearer {access_token}"},
         )

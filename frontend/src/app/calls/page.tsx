@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight, ChevronRight, Radio, Building2, Clock } from "lucide-react";
-import { api, type Call, type Company, type Outcome, type Transcript } from "@/lib/api";
+import { ArrowRight, CalendarClock, Check, ChevronRight, Copy, Radio, Building2, Clock } from "lucide-react";
+import { api, type Call, type CalendarEvent, type Company, type GoogleOAuthStatus, type Outcome, type Transcript } from "@/lib/api";
 import { Button, Card, EmptyState, ErrorNote, Input, Loading, OutcomeBadge, PageHeader, StatusBadge, Badge } from "@/components/ui";
 import { AuroraBg, Reveal, Stagger, StaggerItem } from "@/components/motion";
 import { fmtDateTime, fmtDuration } from "@/lib/format";
@@ -17,24 +17,33 @@ export default function MeetingsPage() {
   const [calls, setCalls] = useState<Call[] | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
+  const [schedule, setSchedule] = useState<CalendarEvent[]>([]);
+  const [botEmail, setBotEmail] = useState<string | null>(null);
+  const [botOAuth, setBotOAuth] = useState<GoogleOAuthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [companyInput, setCompanyInput] = useState("");
   const [url, setUrl] = useState("");
   const [starting, setStarting] = useState(false);
 
   async function load() {
-    const [c, comp, outs] = await Promise.all([
+    const [c, comp, outs, sched] = await Promise.all([
       api.listCalls(),
       api.listCompanies().catch(() => []),
       api.listOutcomes().catch(() => []),
+      api.autoJoinSchedule().catch(() => []),
     ]);
     setCalls(c);
     setCompanies(comp);
     setOutcomes(outs);
+    setSchedule(sched);
   }
 
   useEffect(() => {
     load().catch((e) => setError(String(e)));
+    // The invite address + whether the bot's Google connection can see its
+    // calendar — both drive the auto-join guidance below. Best-effort.
+    api.getSettingsStatus().then((s) => setBotEmail(s.bot.account_email)).catch(() => {});
+    api.getGoogleStatus("bot").then(setBotOAuth).catch(() => {});
   }, []);
 
   const hasActive = !!calls?.some((c) => ACTIVE.has(c.status));
@@ -43,6 +52,13 @@ export default function MeetingsPage() {
     const t = setInterval(() => load().catch(() => {}), 5000);
     return () => clearInterval(t);
   }, [hasActive]);
+
+  // The auto-join poller ticks server-side every minute; keep the schedule fresh
+  // even when nothing is being recorded yet.
+  useEffect(() => {
+    const t = setInterval(() => api.autoJoinSchedule().then(setSchedule).catch(() => {}), 30000);
+    return () => clearInterval(t);
+  }, []);
 
   const companyName = useMemo(() => {
     const m = new Map(companies.map((c) => [c.id, c.name]));
@@ -84,7 +100,7 @@ export default function MeetingsPage() {
       <PageHeader
         eyebrow="Meeting intelligence"
         title="Meetings"
-        sub="Drop in a Google Meet link. The bot joins, transcribes the conversation live, then writes the minutes, scores the call, and files it into account memory."
+        sub="Invite the bot to a meeting and it joins on its own — or drop in a Meet link to start now. It transcribes live, writes the minutes, scores the call, and files it into account memory."
       />
 
       {/* Start bot */}
@@ -136,11 +152,68 @@ export default function MeetingsPage() {
             </Button>
           </div>
 
-          <p className="mt-2.5 text-xs text-muted">
-            Add <span className="font-mono text-ink">the bot account</span> as a participant so Meet admits it automatically.
+          <p className="mt-2.5 flex flex-wrap items-center gap-x-1 text-xs text-muted">
+            Or skip this entirely: invite{" "}
+            {botEmail ? <CopyEmail email={botEmail} /> : <span className="font-mono text-ink">the bot account</span>}{" "}
+            to the meeting and it joins on its own when the meeting starts.
           </p>
         </div>
       </Card>
+
+      {/* Auto-join schedule — meetings found on the bot's calendar */}
+      <section className="mb-9">
+        <div className="mb-3 flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-faint">
+          <CalendarClock size={13} /> Auto-join schedule
+        </div>
+        {schedule.filter((e) => e.status !== "cancelled" && e.status !== "skipped").length === 0 ? (
+          <Card className="p-5">
+            {botOAuth && (!botOAuth.connected || !botOAuth.has_calendar_scope) ? (
+              <p className="text-sm text-warning">
+                Auto-join isn&apos;t active yet — the bot&apos;s Google account{" "}
+                {botOAuth.connected ? "can’t see its calendar" : "isn’t connected"}.{" "}
+                <Link href="/settings" className="font-medium underline underline-offset-2">
+                  Fix it in Settings
+                </Link>{" "}
+                and invited meetings will join themselves.
+              </p>
+            ) : (
+              <p className="text-sm text-muted">
+                No upcoming invites. Add{" "}
+                {botEmail ? <CopyEmail email={botEmail} /> : <span className="font-mono text-ink">the bot&apos;s email</span>}{" "}
+                as a guest to any calendar event with a Meet link — it shows up here and the bot
+                joins at start time, no link pasting needed.
+              </p>
+            )}
+          </Card>
+        ) : (
+          <Card className="divide-y divide-hairline p-0">
+            {schedule
+              .filter((e) => e.status !== "cancelled" && e.status !== "skipped")
+              .map((e) => (
+                <div key={e.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-ink">{e.title ?? "Untitled meeting"}</div>
+                    <div className="font-mono text-[11px] text-faint">
+                      {fmtDateTime(e.start_at)} · {e.meet_code}
+                      {e.organizer_email ? ` · ${e.organizer_email}` : ""}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2.5">
+                    <AutoJoinPill status={e.status} note={e.note} />
+                    {e.status === "dispatched" && e.call_id && (
+                      <Link
+                        href={`/calls/${e.call_id}`}
+                        className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"
+                      >
+                        Open <ChevronRight size={14} />
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              ))}
+          </Card>
+        )}
+      </section>
 
       {error && <ErrorNote>Couldn’t reach the API: {error}</ErrorNote>}
       {!calls && !error && <Loading label="Loading meetings" />}
@@ -218,6 +291,44 @@ export default function MeetingsPage() {
         </section>
       )}
     </div>
+  );
+}
+
+function AutoJoinPill({ status, note }: { status: CalendarEvent["status"]; note: string | null }) {
+  if (status === "pending")
+    return <span className="font-mono text-[11px] text-warning">Will join</span>;
+  if (status === "dispatched")
+    return <span className="font-mono text-[11px] text-success">Bot joined</span>;
+  return (
+    <span className="font-mono text-[11px] text-faint" title={note ?? undefined}>
+      Missed
+    </span>
+  );
+}
+
+/** The bot's invite address, click-to-copy — the one thing users must know to use auto-join. */
+function CopyEmail({ email }: { email: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(email);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable (http, permissions) — the address is still visible to select */
+    }
+  }
+
+  return (
+    <button
+      onClick={copy}
+      title="Copy email"
+      className="inline-flex items-center gap-1 rounded border border-hairline bg-raised px-1.5 py-0.5 font-mono text-[11px] text-ink transition hover:border-accent/40"
+    >
+      {email}
+      {copied ? <Check size={11} className="text-success" /> : <Copy size={11} className="text-faint" />}
+    </button>
   );
 }
 

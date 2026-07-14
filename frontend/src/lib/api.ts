@@ -144,6 +144,28 @@ export interface GoogleOAuthStatus {
   configured: boolean;
   connected: boolean;
   email: string | null;
+  // Whether the connection carries calendar.readonly. The bot connection needs
+  // it for calendar auto-join; false on a bot account connected before that
+  // scope existed (fix = reconnect once).
+  has_calendar_scope: boolean;
+}
+
+// A meeting discovered on the bot's own calendar — the auto-join schedule.
+export type AutoJoinStatus = "pending" | "dispatched" | "missed" | "skipped" | "cancelled";
+
+export interface CalendarEvent {
+  id: string;
+  google_event_id: string;
+  title: string | null;
+  organizer_email: string | null;
+  meet_code: string;
+  meeting_url: string;
+  start_at: string;
+  end_at: string | null;
+  status: AutoJoinStatus;
+  note: string | null;
+  call_id: string | null;
+  created_at: string;
 }
 
 export interface TeamMember {
@@ -282,6 +304,9 @@ export const api = {
   importTranscript: (id: string) => post<Mom>(`/calls/${id}/import-transcript`, {}),
   startCall: (meeting_url: string, company_name?: string) =>
     post<Call>(`/calls/start`, { meeting_url, company_name }),
+  // meetings on the bot's calendar it will join automatically (invite the bot's
+  // email to a meeting and it shows up here)
+  autoJoinSchedule: () => get<CalendarEvent[]>(`/calls/auto-join`),
   stopCall: (id: string) => post<Call>(`/calls/${id}/stop`, {}),
   assignCompany: (
     id: string,

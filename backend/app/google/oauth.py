@@ -4,7 +4,9 @@ Two independent connections ("purposes"), each a normal consent screen — no
 domain-wide delegation — whose refresh token we keep to mint short-lived access
 tokens on demand:
 
-  - "calendar": the meeting organizer's own calendar (attendee emails via events).
+  - "calendar": the meeting organizer's own calendar. Powers attendee emails via
+    events, and calendar auto-join: every Meet meeting on it gets a bot, invited
+    or not (an uninvited bot knocks and waits to be admitted).
   - "bot": the BOT's Google account — the one that actually joins every meeting.
     Because the bot is a participant, its token can read each finished meeting's
     participant list (Meet REST API) and resolve signed-in participants to real
@@ -45,6 +47,9 @@ SCOPES: dict[str, list[str]] = {
     BOT: [
         "openid",
         "email",
+        # The bot's own calendar: every meeting the bot's email is invited to
+        # appears here, which is what powers calendar auto-join (à la Fireflies).
+        "https://www.googleapis.com/auth/calendar.readonly",
         # Read conference records (participants) of meetings the bot attended.
         "https://www.googleapis.com/auth/meetings.space.readonly",
         # Resolve participant user IDs to names/emails via the People API.

@@ -80,6 +80,34 @@ class Settings(BaseSettings):
     # so the bot is auto-admitted instead of queued/rejected.
     bot_google_account_email: str | None = None
     bot_google_account_password: str | None = None
+    # An auto-joined bot that finds itself alone (nobody showed up, or everyone
+    # left without removing it) leaves after this long, freeing its slot. The
+    # timer only counts successful roster reads showing just the bot; 0 disables
+    # and restores the old behaviour (stay until removed / stopped).
+    bot_alone_timeout_seconds: int = 600
+    # How long the bot keeps knocking before giving up on a meeting it wasn't
+    # admitted to (cancelled meeting, nobody showed, or the host ignored it).
+    # Invited bots are auto-admitted and never wait this long; this mainly guards
+    # meetings auto-joined from a user's connected calendar, where the bot isn't
+    # a guest and a human must click Admit.
+    bot_admit_timeout_seconds: int = 300
+
+    # --- Calendar auto-join (à la Fireflies / Otter / Read.ai) -----------------
+    # Users invite the bot's email to their meetings anyway (that is what gets it
+    # auto-admitted), so every meeting sits on the bot account's own calendar.
+    # When enabled, a background poller reads that calendar (bot OAuth connection,
+    # calendar.readonly scope) and launches a bot as each meeting starts — no one
+    # has to paste the Meet link anymore. Requires the bot Google account to be
+    # connected in Settings with the calendar scope granted (reconnect once after
+    # upgrading to a build that has this feature).
+    auto_join_enabled: bool = True
+    # How often the bot's calendar is polled for upcoming/changed events.
+    auto_join_poll_seconds: int = 60
+    # Join this many seconds before the event's scheduled start, so the bot is in
+    # the room (or first in the admit queue) when people arrive.
+    auto_join_lead_seconds: int = 60
+    # How far ahead the poller mirrors events (visibility in the UI schedule).
+    auto_join_lookahead_hours: int = 12
 
     # Participant role classification (our team vs the client). Any attendee whose
     # email domain is in this list is treated as our internal team; everyone else

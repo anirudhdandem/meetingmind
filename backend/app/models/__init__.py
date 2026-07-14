@@ -1,5 +1,6 @@
 """ORM models. Importing this package registers all tables on Base.metadata."""
 
+from app.models.calendar_event import CalendarEvent
 from app.models.call import Call, CallStatus, MeetingPlatform
 from app.models.company import Company
 from app.models.embedding import EMBED_DIM, CompanyMemory
@@ -14,6 +15,7 @@ from app.models.transcript import CallTranscript
 from app.models.user import User, UserSession
 
 __all__ = [
+    "CalendarEvent",
     "Call",
     "CallStatus",
     "MeetingPlatform",
