@@ -1,8 +1,13 @@
 """Routes: per-user Google OAuth connections.
 
-Two purposes share one flow: "calendar" (organizer's calendar, for attendee emails
-from events) and "bot" (the bot's own Google account, for the Meet participant list
-+ People API email resolution — the deterministic internal-vs-client source).
+Two purposes share one flow: "calendar" (the signed-in user's own calendar — one
+connection per app user, powering auto-join + attendee emails) and "bot" (the
+bot's own Google account, app-wide, for the Meet participant list + People API
+email resolution — the deterministic internal-vs-client source).
+
+The whole router sits behind require_user (see main.py), including the Google
+callback: cookie_samesite=lax sends the session cookie on that top-level
+redirect, which is how a calendar connection gets tied to the right app user.
 """
 
 from __future__ import annotations
@@ -13,10 +18,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_user
 from app.config import get_settings
 from app.core.db import get_session
 from app.core.logging import get_logger
 from app.google import oauth
+from app.models.user import User
 
 log = get_logger(__name__)
 
@@ -34,10 +41,12 @@ def _check_purpose(purpose: str) -> str:
 
 @router.get("/oauth/google/status")
 async def google_status(
-    purpose: str = oauth.CALENDAR, db: AsyncSession = Depends(get_session)
+    purpose: str = oauth.CALENDAR,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
 ) -> dict:
-    """Whether an account is connected for this purpose, and which one."""
-    cred = await oauth.connected_account(db, _check_purpose(purpose))
+    """Whether an account is connected for this purpose — the caller's own, for calendar."""
+    cred = await oauth.connected_account(db, _check_purpose(purpose), user.id)
     return {
         "configured": oauth.is_configured(),
         "connected": cred is not None,
@@ -71,11 +80,16 @@ async def google_start(purpose: str = oauth.CALENDAR):
 async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
 ):
-    """Google redirects here with an auth code; store the refresh token."""
+    """Google redirects here with an auth code; store the refresh token.
+
+    A calendar connection is stored against the signed-in user (their session
+    cookie rides along on this top-level redirect); the bot stays app-wide.
+    """
     settings = get_settings()
     dest = f"{settings.app_base_url.rstrip('/')}/settings"
 
@@ -88,7 +102,7 @@ async def google_callback(
         return RedirectResponse(f"{dest}?google=error&purpose={purpose}")
 
     try:
-        email = await oauth.exchange_code(db, code, purpose)
+        email = await oauth.exchange_code(db, code, purpose, user.id)
     except Exception:
         log.exception("Google OAuth code exchange failed (purpose=%s)", purpose)
         return RedirectResponse(f"{dest}?google=error&purpose={purpose}")
@@ -115,7 +129,9 @@ async def google_callback(
 
 @router.delete("/oauth/google", status_code=204)
 async def google_disconnect(
-    purpose: str = oauth.CALENDAR, db: AsyncSession = Depends(get_session)
+    purpose: str = oauth.CALENDAR,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
 ):
-    """Disconnect a purpose's account (forget its stored token)."""
-    await oauth.disconnect(db, _check_purpose(purpose))
+    """Disconnect a slot's account (the caller's own, for calendar)."""
+    await oauth.disconnect(db, _check_purpose(purpose), user.id)

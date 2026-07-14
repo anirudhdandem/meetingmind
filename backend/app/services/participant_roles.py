@@ -82,9 +82,6 @@ async def build_email_roles(session: AsyncSession, call: Call) -> dict[str, str]
     code = meeting_code_from_url(call.meeting_url or "")
     if not code:
         return {}
-    token = await oauth.access_token(session)
-    if not token:
-        return {}
 
     anchor = call.scheduled_at or call.started_at or call.created_at
     if anchor is None:
@@ -94,13 +91,21 @@ async def build_email_roles(session: AsyncSession, call: Call) -> dict[str, str]
     time_min = (anchor - _SEARCH_WINDOW).isoformat()
     time_max = (anchor + _SEARCH_WINDOW).isoformat()
 
-    try:
-        events = await calendar.list_events(token, time_min, time_max)
-    except Exception:
-        log.exception("Calendar lookup failed for call %s", call.id)
-        return {}
-
-    event = next((e for e in events if _event_meet_code(e) == code), None)
+    # Calendar connections are per app user now — the meeting sits on whichever
+    # teammate's calendar owns it, so search each until one has the event.
+    event = None
+    for cred in await oauth.calendar_accounts(session):
+        token = await oauth.token_for(cred)
+        if not token:
+            continue
+        try:
+            events = await calendar.list_events(token, time_min, time_max)
+        except Exception:
+            log.exception("Calendar lookup failed for call %s (%s)", call.id, cred.email)
+            continue
+        event = next((e for e in events if _event_meet_code(e) == code), None)
+        if event is not None:
+            break
     if event is None:
         log.info("No calendar event matched Meet code %s for call %s", code, call.id)
         return {}

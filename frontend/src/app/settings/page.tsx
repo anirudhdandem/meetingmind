@@ -512,15 +512,15 @@ export default function SettingsPage() {
           <TeamRosterCard />
           <GoogleAccountCard
             purpose="calendar"
-            title="Google Calendar"
+            title="Your Google Calendar"
             optional
-            connectLabel="Connect Google Calendar"
+            connectLabel="Connect my calendar"
             description={
               <>
-                Connect your calendar and the bot auto-joins <em>every</em> Meet meeting on it —
-                no invite needed. Heads-up: when the bot isn&apos;t an invited guest it knocks and
-                waits to be let in (it gives up after a few minutes if nobody admits it). Also
-                used to detect sides from invites by email domain.
+                Connect your own calendar once and the bot auto-joins <em>every</em> Meet meeting
+                on it — no invites, no links. Each teammate connects theirs. Heads-up: when the
+                bot isn&apos;t an invited guest it knocks and waits to be let in (it gives up
+                after a few minutes if nobody admits it).
               </>
             }
           />

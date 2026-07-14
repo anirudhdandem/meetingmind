@@ -4,8 +4,9 @@ Two independent connections ("purposes"), each a normal consent screen — no
 domain-wide delegation — whose refresh token we keep to mint short-lived access
 tokens on demand:
 
-  - "calendar": the meeting organizer's own calendar. Powers attendee emails via
-    events, and calendar auto-join: every Meet meeting on it gets a bot, invited
+  - "calendar": an app user's own calendar — one connection PER USER (user_id on
+    the credential row). Powers attendee emails via events, and calendar
+    auto-join: every Meet meeting on any connected calendar gets a bot, invited
     or not (an uninvited bot knocks and waits to be admitted).
   - "bot": the BOT's Google account — the one that actually joins every meeting.
     Because the bot is a participant, its token can read each finished meeting's
@@ -19,6 +20,8 @@ exchange_code() stores the refresh token -> access_token(purpose) refreshes as n
 """
 
 from __future__ import annotations
+
+import uuid
 
 import httpx
 from sqlalchemy import select
@@ -83,7 +86,25 @@ def authorization_url(state: str, purpose: str = CALENDAR) -> str:
     return str(httpx.URL(AUTH_ENDPOINT, params=params))
 
 
-async def exchange_code(session: AsyncSession, code: str, purpose: str = CALENDAR) -> str:
+def _scope_clause(purpose: str, user_id: uuid.UUID | None):
+    """The WHERE terms that identify one connection slot.
+
+    The bot is app-wide (one row, user_id ignored); a calendar connection belongs
+    to one app user. user_id=None on the calendar purpose matches only legacy
+    unowned rows, which no longer exist after migration 0018.
+    """
+    terms = [GoogleOAuthCredential.purpose == purpose]
+    if purpose == CALENDAR:
+        terms.append(GoogleOAuthCredential.user_id == user_id)
+    return terms
+
+
+async def exchange_code(
+    session: AsyncSession,
+    code: str,
+    purpose: str = CALENDAR,
+    user_id: uuid.UUID | None = None,
+) -> str:
     """Trade an auth code for tokens, store the refresh token, return the account email."""
     s = get_settings()
     async with httpx.AsyncClient(timeout=30) as client:
@@ -115,10 +136,11 @@ async def exchange_code(session: AsyncSession, code: str, purpose: str = CALENDA
         # didn't re-issue one; prompt=consent above is meant to avoid this.
         raise RuntimeError("OAuth exchange did not return an email + refresh token")
 
-    # One credential per purpose: a re-connect (any account) replaces the old one.
+    # One credential per slot (bot: app-wide; calendar: per app user): a
+    # re-connect (any account) replaces the old one in that slot only.
     existing = (
         await session.execute(
-            select(GoogleOAuthCredential).where(GoogleOAuthCredential.purpose == purpose)
+            select(GoogleOAuthCredential).where(*_scope_clause(purpose, user_id))
         )
     ).scalars().all()
     for row in existing:
@@ -126,32 +148,46 @@ async def exchange_code(session: AsyncSession, code: str, purpose: str = CALENDA
     await session.flush()  # deletes hit the DB before the insert
     session.add(
         GoogleOAuthCredential(
-            email=email, refresh_token=refresh_token, scopes=scopes, purpose=purpose
+            email=email,
+            refresh_token=refresh_token,
+            scopes=scopes,
+            purpose=purpose,
+            user_id=user_id if purpose == CALENDAR else None,
         )
     )
     await session.commit()
-    log.info("Connected Google account %s (purpose=%s)", email, purpose)
+    log.info("Connected Google account %s (purpose=%s user=%s)", email, purpose, user_id)
     return email
 
 
 async def connected_account(
-    session: AsyncSession, purpose: str = CALENDAR
+    session: AsyncSession, purpose: str = CALENDAR, user_id: uuid.UUID | None = None
 ) -> GoogleOAuthCredential | None:
-    """The connected account for a purpose (most recent), or None if not connected."""
+    """The connected account for a slot (bot: app-wide; calendar: this user's), or None."""
     return (
         await session.execute(
             select(GoogleOAuthCredential)
-            .where(GoogleOAuthCredential.purpose == purpose)
+            .where(*_scope_clause(purpose, user_id))
             .order_by(GoogleOAuthCredential.created_at.desc())
         )
     ).scalars().first()
 
 
-async def access_token(session: AsyncSession, purpose: str = CALENDAR) -> str | None:
-    """A fresh access token for a purpose's connected account, or None."""
-    cred = await connected_account(session, purpose)
-    if cred is None:
-        return None
+async def calendar_accounts(session: AsyncSession) -> list[GoogleOAuthCredential]:
+    """Every user-connected calendar — the auto-join poller sweeps all of them."""
+    return list(
+        (
+            await session.execute(
+                select(GoogleOAuthCredential)
+                .where(GoogleOAuthCredential.purpose == CALENDAR)
+                .order_by(GoogleOAuthCredential.created_at)
+            )
+        ).scalars().all()
+    )
+
+
+async def token_for(cred: GoogleOAuthCredential) -> str | None:
+    """Mint a fresh access token from one stored credential, or None on failure."""
     s = get_settings()
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
@@ -163,15 +199,34 @@ async def access_token(session: AsyncSession, purpose: str = CALENDAR) -> str | 
                 "grant_type": "refresh_token",
             },
         )
-        r.raise_for_status()
+        if r.status_code != 200:
+            # invalid_grant here means the user revoked access (or the OAuth client
+            # changed) — surface who, so "reconnect" lands on the right person.
+            log.warning(
+                "token refresh failed for %s (purpose=%s): %s",
+                cred.email, cred.purpose, r.text[:200],
+            )
+            return None
         return r.json().get("access_token")
 
 
-async def disconnect(session: AsyncSession, purpose: str = CALENDAR) -> None:
-    """Forget the connected account(s) for a purpose."""
+async def access_token(
+    session: AsyncSession, purpose: str = CALENDAR, user_id: uuid.UUID | None = None
+) -> str | None:
+    """A fresh access token for a slot's connected account, or None."""
+    cred = await connected_account(session, purpose, user_id)
+    if cred is None:
+        return None
+    return await token_for(cred)
+
+
+async def disconnect(
+    session: AsyncSession, purpose: str = CALENDAR, user_id: uuid.UUID | None = None
+) -> None:
+    """Forget the connected account for a slot (bot: app-wide; calendar: this user's)."""
     rows = (
         await session.execute(
-            select(GoogleOAuthCredential).where(GoogleOAuthCredential.purpose == purpose)
+            select(GoogleOAuthCredential).where(*_scope_clause(purpose, user_id))
         )
     ).scalars().all()
     for cred in rows:

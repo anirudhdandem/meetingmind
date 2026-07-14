@@ -6,8 +6,9 @@ auto-admitted), which places the event on the bot account's own Google Calendar.
 A background poller reads that calendar through the "bot" OAuth connection and
 launches a recording bot as each meeting starts. Nobody pastes a link.
 
-A user-connected calendar (the "calendar" OAuth purpose) is swept the same way:
-every Meet-bearing event on it is joined too, invite or not. The difference is
+User-connected calendars (the "calendar" OAuth purpose, one per app user) are
+swept the same way: every Meet-bearing event on them is joined too, invite or
+not. The difference is
 admission — an uninvited bot knocks and waits in Meet's lobby, giving up after
 `bot_admit_timeout_seconds` (cancelled meeting / nobody showed), while an
 invited one walks straight in. Both calendars can list the same event; the
@@ -240,29 +241,36 @@ async def tick() -> None:
             (now + dt.timedelta(hours=settings.auto_join_lookahead_hours)).isoformat(),
         )
 
-        synced_any = False
-        for purpose in (oauth.BOT, oauth.CALENDAR):
-            cred = await oauth.connected_account(db, purpose)
-            if cred is None:
-                continue  # not connected — Settings page does that
-            if cred.scopes and CALENDAR_SCOPE not in cred.scopes:
-                # Only the bot connection can legitimately lack the scope (it predates
-                # auto-join); the calendar purpose exists solely to grant it.
-                if purpose == oauth.BOT and not _warned_no_scope:
+        creds = []
+        bot_cred = await oauth.connected_account(db, oauth.BOT)
+        if bot_cred is not None:
+            if bot_cred.scopes and CALENDAR_SCOPE not in bot_cred.scopes:
+                # The bot connection can legitimately lack the scope (it predates
+                # auto-join) — the Settings page asks for a one-time reconnect.
+                if not _warned_no_scope:
                     log.warning(
                         "auto-join: the connected bot account (%s) has no calendar access — "
                         "reconnect it in Settings to grant calendar.readonly",
-                        cred.email,
+                        bot_cred.email,
                     )
                     _warned_no_scope = True
-                continue
-            if purpose == oauth.BOT:
+            else:
                 _warned_no_scope = False
+                creds.append(bot_cred)
+        # Every teammate's connected calendar joins the sweep; one bad credential
+        # (revoked, etc.) is skipped by token_for and can't starve the rest.
+        creds.extend(await oauth.calendar_accounts(db))
 
-            token = await oauth.access_token(db, purpose)
+        synced_any = False
+        for cred in creds:
+            token = await oauth.token_for(cred)
             if not token:
                 continue
-            events = await calendar.list_events(token, *window, show_deleted=True)
+            try:
+                events = await calendar.list_events(token, *window, show_deleted=True)
+            except Exception:
+                log.exception("auto-join: calendar sweep failed for %s", cred.email)
+                continue
             await _sync_events(db, events, cred.email)
             synced_any = True
 
