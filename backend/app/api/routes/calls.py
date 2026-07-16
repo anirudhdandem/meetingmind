@@ -9,10 +9,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_user
 from app.core.db import get_session
 from app.models.calendar_event import CalendarEvent
 from app.models.call import Call, CallStatus
 from app.models.company import Company
+from app.models.user import User
 from app.models.embedding import CompanyMemory
 from app.models.metrics import CallMetrics
 from app.models.mom import Mom
@@ -31,6 +33,17 @@ from app.schemas.calls import (
     TranscriptOut,
 )
 from app.services import call_processor
+from app.services.call_visibility import (
+    ensure_call_visible,
+    event_visible,
+    user_emails,
+    visible_calls,
+)
+from app.services.company_naming import (
+    DEFAULT_COMPANY_NAME,
+    gc_default_company as _gc_company,
+    get_or_create_company as _get_or_create_company,
+)
 
 router = APIRouter(tags=["calls"])
 
@@ -59,11 +72,16 @@ async def list_companies(db: AsyncSession = Depends(get_session)):
 
 # --- calls -------------------------------------------------------------------
 @router.post("/calls", response_model=CallOut, status_code=201)
-async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_session)):
+async def create_call(
+    payload: CallCreate,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
     if await db.get(Company, payload.company_id) is None:
         raise HTTPException(404, "company not found")
     call = Call(
         company_id=payload.company_id,
+        created_by_user_id=user.id,
         sales_rep_id=payload.sales_rep_id,
         meeting_platform=payload.meeting_platform,
         meeting_url=payload.meeting_url,
@@ -77,28 +95,12 @@ async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_sessio
     return call
 
 
-DEFAULT_COMPANY_NAME = "Ad-hoc meetings"
-
-
-async def _get_or_create_company(
-    db: AsyncSession, name: str, kind: str = "external", segment: str | None = None
-) -> Company:
-    company = (
-        await db.execute(
-            select(Company).where(Company.name == name, Company.kind == kind)
-        )
-    ).scalars().first()
-    if company is None:
-        company = Company(name=name, kind=kind, segment=segment)
-        db.add(company)
-        await db.flush()
-    elif segment is not None and company.segment != segment:
-        company.segment = segment
-    return company
-
-
 @router.post("/calls/start", response_model=CallOut, status_code=201)
-async def start_call(payload: CallStart, db: AsyncSession = Depends(get_session)):
+async def start_call(
+    payload: CallStart,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
     """Paste a meeting URL → create the call and launch the bot immediately.
 
     No company/call setup needed beforehand: a default company is reused so the
@@ -118,6 +120,7 @@ async def start_call(payload: CallStart, db: AsyncSession = Depends(get_session)
     company = await _get_or_create_company(db, payload.company_name or DEFAULT_COMPANY_NAME)
     call = Call(
         company_id=company.id,
+        created_by_user_id=user.id,
         meeting_platform=payload.meeting_platform,
         meeting_url=payload.meeting_url,
         livekit_room=f"mm-{uuid.uuid4().hex[:12]}",
@@ -196,31 +199,24 @@ async def assign_company(
     return call
 
 
-async def _gc_company(db: AsyncSession, company_id: uuid.UUID) -> None:
-    """Delete a company that no longer has any calls (e.g. the default ad-hoc bucket)."""
-    if company_id is None:
-        return
-    still_used = (
-        await db.execute(select(Call.id).where(Call.company_id == company_id).limit(1))
-    ).first()
-    if still_used is None:
-        company = await db.get(Company, company_id)
-        if company is not None and company.name == DEFAULT_COMPANY_NAME:
-            await db.delete(company)
-
-
 @router.get("/calls", response_model=list[CallOut])
-async def list_calls(db: AsyncSession = Depends(get_session)):
+async def list_calls(
+    db: AsyncSession = Depends(get_session), user: User = Depends(require_user)
+):
+    """The viewer's own meetings — started by them or on their calendar invite."""
     rows = (await db.execute(select(Call).order_by(Call.created_at.desc()))).scalars().all()
-    return rows
+    return await visible_calls(db, rows, user)
 
 
 @router.get("/calls/auto-join", response_model=list[CalendarEventOut])
-async def auto_join_schedule(db: AsyncSession = Depends(get_session)):
-    """The auto-join schedule: meetings found on the bot's calendar, recent first-up.
+async def auto_join_schedule(
+    db: AsyncSession = Depends(get_session), user: User = Depends(require_user)
+):
+    """The auto-join schedule: the viewer's upcoming meetings, recent first-up.
 
-    Users invite the bot's email to a meeting and it appears here; a bot is
-    dispatched automatically when the meeting starts (see services/auto_join).
+    Users invite the bot's email to a meeting (or connect their calendar) and it
+    appears here; a bot is dispatched automatically when the meeting starts (see
+    services/auto_join). Scoped to events whose invite lists the viewer.
     Declared before /calls/{call_id} so the literal path wins the route match.
     """
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=12)
@@ -232,19 +228,35 @@ async def auto_join_schedule(db: AsyncSession = Depends(get_session)):
             .limit(50)
         )
     ).scalars().all()
-    return rows
+    emails = await user_emails(db, user)
+    return [r for r in rows if event_visible(r.attendee_emails, emails)]
 
 
-@router.get("/calls/{call_id}", response_model=CallOut)
-async def get_call(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
+async def _get_visible_call(db: AsyncSession, call_id: uuid.UUID, user: User) -> Call:
+    """The call, or 404 — both when it doesn't exist and when it isn't the viewer's
+    to see, so the response doesn't leak which meeting ids exist."""
     call = await db.get(Call, call_id)
-    if call is None:
+    if call is None or not await ensure_call_visible(db, call, user):
         raise HTTPException(404, "call not found")
     return call
 
 
+@router.get("/calls/{call_id}", response_model=CallOut)
+async def get_call(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    return await _get_visible_call(db, call_id, user)
+
+
 @router.get("/calls/{call_id}/transcript", response_model=list[TranscriptOut])
-async def get_transcript(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
+async def get_transcript(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    await _get_visible_call(db, call_id, user)
     rows = (
         await db.execute(
             select(CallTranscript)
@@ -256,7 +268,12 @@ async def get_transcript(call_id: uuid.UUID, db: AsyncSession = Depends(get_sess
 
 
 @router.get("/calls/{call_id}/mom", response_model=MomOut)
-async def get_mom(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
+async def get_mom(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    await _get_visible_call(db, call_id, user)
     mom = (await db.execute(select(Mom).where(Mom.call_id == call_id))).scalars().first()
     if mom is None:
         raise HTTPException(404, "MOM not found (call may not be processed yet)")
@@ -264,7 +281,12 @@ async def get_mom(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
 
 
 @router.get("/calls/{call_id}/score", response_model=ScoreOut)
-async def get_score(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
+async def get_score(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    await _get_visible_call(db, call_id, user)
     score = (await db.execute(select(CallScore).where(CallScore.call_id == call_id))).scalars().first()
     if score is None:
         raise HTTPException(404, "score not found (call may not be processed yet)")
@@ -272,8 +294,13 @@ async def get_score(call_id: uuid.UUID, db: AsyncSession = Depends(get_session))
 
 
 @router.get("/calls/{call_id}/metrics", response_model=MetricsOut)
-async def get_metrics(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
+async def get_metrics(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
     """Team performance metrics: talk-time split, confidence, answer quality, conversion."""
+    await _get_visible_call(db, call_id, user)
     m = (
         await db.execute(select(CallMetrics).where(CallMetrics.call_id == call_id))
     ).scalars().first()
@@ -283,8 +310,13 @@ async def get_metrics(call_id: uuid.UUID, db: AsyncSession = Depends(get_session
 
 
 @router.get("/calls/{call_id}/outcome", response_model=OutcomeOut)
-async def get_call_outcome(call_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
+async def get_call_outcome(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+):
     """Latest won/lost/pending outcome recorded for this call (404 if none yet)."""
+    await _get_visible_call(db, call_id, user)
     outcome = (
         await db.execute(
             select(LeadOutcome)

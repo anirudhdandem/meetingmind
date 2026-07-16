@@ -25,6 +25,7 @@ from app.models.score import CallScore
 from app.models.transcript import CallTranscript
 from app.services import (
     batch_transcription,
+    company_naming,
     meet_identity,
     metrics,
     participant_roles,
@@ -222,6 +223,13 @@ async def process_call(
     )
 
     company = await session.get(Company, call.company_id)
+    # A call still in the ad-hoc bucket that a calendar event later matched (the
+    # adopt flow): file it under the invite's company now, so the analysis below
+    # and the MOM land under the right name without anyone typing it.
+    if company is not None and company.name == company_naming.DEFAULT_COMPANY_NAME:
+        derived = await company_naming.assign_company_from_event(session, call)
+        if derived is not None:
+            company = derived
     # kind == "internal": an internal meeting filed under a label — every attendee is
     # one of ours by definition, which also makes it a free roster-learning source.
     internal_meeting = bool(company and company.kind == "internal")

@@ -12,7 +12,7 @@ import datetime
 import uuid
 
 from sqlalchemy import DateTime, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -40,6 +40,11 @@ class CalendarEvent(Base, UUIDPk, Timestamped):
 
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     organizer_email: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Lowercased emails of everyone on the invite (attendees + organizer + the
+    # calendar the event was found on). Drives per-user visibility: a teammate
+    # sees this meeting only if one of their emails is in here. NULL = synced
+    # before ownership existed; such events stay visible to everyone.
+    attendee_emails: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     start_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
     end_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))

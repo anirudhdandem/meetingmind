@@ -89,6 +89,23 @@ def _meeting_url(event: dict, code: str) -> str:
     return event.get("hangoutLink") or f"https://meet.google.com/{code}"
 
 
+def _attendee_emails(event: dict, owner_email: str, existing: list | None) -> list[str]:
+    """Everyone on the invite, lowercased: attendees + organizer + the calendar's
+    owner (a personal event with no attendee list still belongs to its owner).
+    Merged with what earlier sweeps saw, so two calendars listing the same event
+    only ever widen visibility."""
+    emails = {e.lower() for e in existing or [] if e}
+    for a in event.get("attendees") or []:
+        if a.get("email"):
+            emails.add(a["email"].strip().lower())
+    organizer = (event.get("organizer") or {}).get("email")
+    if organizer:
+        emails.add(organizer.strip().lower())
+    if owner_email:
+        emails.add(owner_email.strip().lower())
+    return sorted(emails)
+
+
 async def _sync_events(db: AsyncSession, events: list[dict], owner_email: str) -> None:
     """Mirror the calendar window into calendar_events (upsert by google_event_id)."""
     now = dt.datetime.now(dt.timezone.utc)
@@ -121,6 +138,7 @@ async def _sync_events(db: AsyncSession, events: list[dict], owner_email: str) -
         row.meeting_url = _meeting_url(event, code)
         row.title = event.get("summary") or row.title
         row.organizer_email = (event.get("organizer") or {}).get("email") or row.organizer_email
+        row.attendee_emails = _attendee_emails(event, owner_email, row.attendee_emails)
         rescheduled = row.start_at != start
         row.start_at = start
         row.end_at = end
@@ -164,8 +182,8 @@ async def _adopt_existing_call(db: AsyncSession, row: CalendarEvent) -> bool:
 
 async def _dispatch_due(db: AsyncSession) -> None:
     """Launch a bot for every pending event whose start time has arrived."""
-    from app.api.routes.calls import DEFAULT_COMPANY_NAME, _get_or_create_company
     from app.bot import manager
+    from app.services.company_naming import company_for_event
 
     settings = get_settings()
     now = dt.datetime.now(dt.timezone.utc)
@@ -196,7 +214,9 @@ async def _dispatch_due(db: AsyncSession) -> None:
             )
             break
 
-        company = await _get_or_create_company(db, DEFAULT_COMPANY_NAME)
+        # Name the company from the invite NOW, so the meeting is filed correctly
+        # before it even starts — no post-meeting "which company was that?" prompt.
+        company = await company_for_event(db, row.title, row.attendee_emails)
         call = Call(
             company_id=company.id,
             meeting_platform=MeetingPlatform.meet,

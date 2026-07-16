@@ -62,7 +62,10 @@ export default function CallDetailPage() {
   const [findingSimilar, setFindingSimilar] = useState(false);
   const [similarError, setSimilarError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
-  const [pendingSave, setPendingSave] = useState(false);
+  // True from end/analyze until the minutes land — drives the "analyzing" state.
+  // The company is filed automatically from the calendar invite, so nothing pops
+  // up when the minutes arrive; "Save details" stays as the manual correction.
+  const [awaitingMom, setAwaitingMom] = useState(false);
 
   const companyObj = companies.find((x) => x.id === call?.company_id) ?? null;
   const company = companyObj?.name ?? null;
@@ -84,13 +87,9 @@ export default function CallDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // After the user summarizes, prompt them to file the meeting once the minutes land.
   useEffect(() => {
-    if (pendingSave && mom) {
-      setShowSave(true);
-      setPendingSave(false);
-    }
-  }, [pendingSave, mom]);
+    if (awaitingMom && mom) setAwaitingMom(false);
+  }, [awaitingMom, mom]);
 
   // Poll while the bot is live, or just after it ends until the minutes land.
   useEffect(() => {
@@ -111,7 +110,7 @@ export default function CallDetailPage() {
     try {
       await api.processCall(id);
       await load();
-      setPendingSave(true); // open the save prompt once minutes are loaded
+      setAwaitingMom(true);
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -127,7 +126,7 @@ export default function CallDetailPage() {
     try {
       await api.importTranscript(id);
       await load();
-      setPendingSave(true);
+      setAwaitingMom(true);
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -137,7 +136,7 @@ export default function CallDetailPage() {
 
   async function endMeeting() {
     setEnding(true);
-    setPendingSave(true); // minutes arrive via polling; the prompt opens then
+    setAwaitingMom(true); // minutes arrive via polling
     try {
       await api.stopCall(id);
       await load();
@@ -171,7 +170,7 @@ export default function CallDetailPage() {
   const live = call?.status === "in_progress" || call?.status === "scheduled";
   // True from the moment the user ends/analyzes until the minutes land — covers the
   // server-side MOM generation window that we wait on via polling.
-  const analyzing = !mom && (pendingSave || processing || importing || ending);
+  const analyzing = !mom && (awaitingMom || processing || importing || ending);
 
   if (!call) return <Loading label="Loading call" />;
 

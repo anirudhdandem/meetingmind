@@ -33,6 +33,15 @@ class Call(Base, UUIDPk, Timestamped):
     )
     sales_rep_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
+    # The app user who started this call by hand (paste-a-link / scheduled form).
+    # NULL for auto-joined calls — those are scoped to viewers via the linked
+    # calendar event's attendee_emails instead — and for pre-ownership rows,
+    # which stay visible to everyone.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+
     meeting_platform: Mapped[MeetingPlatform] = mapped_column(
         Enum(MeetingPlatform, name="meeting_platform"), default=MeetingPlatform.meet
     )
