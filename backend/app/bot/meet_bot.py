@@ -341,6 +341,10 @@ class MeetBot:
     # admission and removal detection MUST use the same list — checking a narrower
     # set on removal is how the bot once left every meeting 10s after joining.
     _IN_CALL_CONTROLS = ("Leave call", "End call", "Call controls")
+    # Consecutive control-less polls (3s each) before the bot gives up as a last
+    # resort. Deliberately long: leaving early loses the whole meeting, while
+    # staying too long costs nothing — the 'bot alone' timer ends idle calls.
+    _CONTROLS_GONE_POLLS = 40
 
     async def _sees_in_call_controls(self, page: Page) -> str | None:
         """The first visible in-call control's label, or None when none are found."""
@@ -365,12 +369,37 @@ class MeetBot:
             await asyncio.sleep(2)
         raise TimeoutError("Bot was not admitted before timeout (host must let it in)")
 
+    async def _modal_is_open(self, page: Page) -> bool:
+        """True when a dialog is covering the call UI.
+
+        Meet marks the page behind a modal inert/aria-hidden, so the in-call controls
+        stop resolving as visible even though the bot is very much still in the call.
+        Third-party notetakers (Read AI, Fireflies) raise a consent dialog that sits
+        there until a human answers it — long enough to trip any miss counter.
+        """
+        try:
+            return await page.get_by_role("dialog").first.is_visible(timeout=500)
+        except Exception:
+            return False
+
+    def _still_on_meeting_page(self, page: Page) -> bool:
+        """True while the browser is still on this meeting's URL.
+
+        A real removal navigates away (or to the 'return to home' screen); the URL is
+        the one signal a modal cannot fake.
+        """
+        code = self.meeting_url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+        return bool(code) and code in page.url
+
     async def wait_until_removed(self, poll: float = 3.0) -> None:
         """Block until the bot is no longer in the call (host kicked it / it ended).
 
-        Stays in the meeting indefinitely otherwise. Detects removal via Meet's
-        'removed / return to home' screen, or the in-call 'Leave call' control
-        disappearing for two consecutive polls.
+        Stays in the meeting indefinitely otherwise. Removal must be corroborated: the
+        bot leaves only on Meet's explicit 'removed / meeting ended' text, or on the
+        browser leaving the meeting URL. Missing in-call controls alone is NOT enough —
+        it fires on modals and toolbar auto-hide, and cost us whole meetings (bots
+        quitting ~16s after joining, producing empty transcripts and no MOM). It is
+        kept only as a slow last-resort check, gated on no modal being open.
         """
         page = self._page
         assert page is not None
@@ -386,7 +415,19 @@ class MeetBot:
             "Rejoin",
         )
         misses = 0
+        modal_seen = False
         while True:
+            # Checked first: a dialog both blanks the in-call controls and injects its
+            # own copy, so nothing below can be read while one is open.
+            if await self._modal_is_open(page):
+                if not modal_seen:
+                    modal_seen = True
+                    log.info("Dialog open over the call UI; holding removal detection")
+                misses = 0
+                await asyncio.sleep(poll)
+                continue
+            modal_seen = False
+
             for text in removal_texts:
                 try:
                     if await page.get_by_text(text, exact=False).first.is_visible(timeout=500):
@@ -394,14 +435,24 @@ class MeetBot:
                         return
                 except Exception:
                     pass
-            # Same control set as admission — see _IN_CALL_CONTROLS. Several
-            # consecutive misses guard against dialogs/animations briefly covering
-            # the toolbar; a real removal also shows one of the texts above.
+            # The browser navigating off the meeting URL is unambiguous.
+            if not self._still_on_meeting_page(page):
+                await self._debug_snapshot(page, "removed-detector-url")
+                log.info("Browser left the meeting URL (%s); bot is out", page.url)
+                return
+
             visible = await self._sees_in_call_controls(page) is not None
             misses = 0 if visible else misses + 1
-            if misses >= 4:
+            # ~2min of no controls, still on the meeting URL, no modal: something is
+            # wrong that none of the positive signals explain. Log loudly — this
+            # threshold exists to avoid hanging forever, not to detect removal.
+            if misses >= self._CONTROLS_GONE_POLLS:
                 await self._debug_snapshot(page, "removed-detector")
-                log.info("In-call controls gone for %d polls; assuming bot was removed", misses)
+                log.warning(
+                    "In-call controls missing for %ds while still on %s — giving up",
+                    int(misses * poll),
+                    page.url,
+                )
                 return
             await asyncio.sleep(poll)
 
