@@ -7,6 +7,7 @@ from typing import TypeVar
 
 from google import genai
 from google.genai import types
+from google.oauth2 import service_account
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -19,7 +20,29 @@ T = TypeVar("T", bound=BaseModel)
 
 @lru_cache
 def _client() -> genai.Client:
-    return genai.Client(api_key=get_settings().gemini_api_key)
+    settings = get_settings()
+    if settings.gemini_vertex_project:
+        # Vertex authenticates with a service account, not a key. Preferred when both
+        # are configured. Without an explicit credentials file we fall through to ADC,
+        # which is what a GCE/Cloud Run host provides via its metadata server.
+        creds = None
+        if settings.gemini_vertex_credentials_file:
+            creds = service_account.Credentials.from_service_account_file(
+                settings.gemini_vertex_credentials_file,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        return genai.Client(
+            vertexai=True,
+            project=settings.gemini_vertex_project,
+            location=settings.gemini_vertex_location,
+            credentials=creds,
+        )
+    if settings.gemini_api_key:
+        return genai.Client(api_key=settings.gemini_api_key)
+    raise RuntimeError(
+        "No Gemini credentials: set GEMINI_VERTEX_PROJECT (with "
+        "GEMINI_VERTEX_CREDENTIALS_FILE) or GEMINI_API_KEY."
+    )
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))

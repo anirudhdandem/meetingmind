@@ -31,6 +31,9 @@ build/
 recordings/
 captures/
 
+# --- Service-account keys (Vertex AI, Meet REST API). Never commit these. ---
+secrets/
+
 # --- Bot Google profile / session (treat as a secret) ---
 bot_profile/
 # Per-bot clones of the master profile — each carries the same Google session cookies.

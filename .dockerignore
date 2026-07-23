@@ -9,6 +9,8 @@
 .env
 .env.*
 !.env.production.example
+# Service-account keys (Vertex AI, Meet). Bind-mounted at runtime, never copied in.
+**/secrets/
 
 # Bot Google session + captured audio: runtime state, mounted as volumes.
 backend/bot_profile/

@@ -55,11 +55,22 @@ def _seed(master: Path, slot: Path) -> None:
         return
     if master.is_dir():
         log.info("Seeding bot profile slot %s from %s (copies the Google session)", slot, master)
-        shutil.copytree(
-            master,
-            slot,
-            ignore=shutil.ignore_patterns(*_LOCK_FILES, *_CACHE_DIRS),
-        )
+        # Copy to a scratch dir and rename into place, so a copy that dies halfway
+        # (out of disk — each slot is ~0.5GB, and raising MAX_CONCURRENT_BOTS adds
+        # one slot each) can't leave a half-seeded, signed-out profile behind that
+        # the `slot.exists()` check above would then reuse forever.
+        staging = slot.with_name(f"{slot.name}.seeding")
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            shutil.copytree(
+                master,
+                staging,
+                ignore=shutil.ignore_patterns(*_LOCK_FILES, *_CACHE_DIRS),
+            )
+        except OSError:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        staging.rename(slot)
     else:
         # No master profile yet: start empty; MeetBot signs in with the
         # configured credentials on first use.

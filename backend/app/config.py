@@ -1,6 +1,7 @@
 """Application settings, loaded from environment / .env (pydantic-settings)."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import field_validator, model_validator
@@ -31,8 +32,23 @@ class Settings(BaseSettings):
     # the bot and read back for the authoritative post-meeting batch transcription.
     recordings_dir: str = "recordings"
 
-    # Gemini
-    gemini_api_key: str
+    # Gemini. Two ways to authenticate, preferred in this order by llm/gemini_client.py:
+    #   - Vertex AI: set gemini_vertex_project + gemini_vertex_credentials_file. No key is
+    #     stored here, so rotating one means swapping a single file.
+    #   - AI Studio: set gemini_api_key. Simplest for local dev.
+    # Model names are identical on both backends, and gemini-embedding-001 returns the
+    # same vectors either way, so stored embeddings survive a switch between them.
+    gemini_api_key: str | None = None
+    gemini_vertex_project: str | None = None
+    # Vertex serves models per-region; the model must be available in this location.
+    # "global" also works and routes to the nearest region.
+    gemini_vertex_location: str = "us-central1"
+    # Absolute path to the Vertex service-account JSON. Loaded explicitly (see
+    # llm/gemini_client.py) rather than through GOOGLE_APPLICATION_CREDENTIALS, because
+    # pydantic-settings parses .env into this object without exporting to os.environ —
+    # ADC would not see a value set there, and would fail only outside Docker. Keep it
+    # absolute: the app's working directory differs between local runs and the image.
+    gemini_vertex_credentials_file: str | None = None
     gemini_llm_model: str = "gemini-2.5-flash"
     gemini_embed_model: str = "gemini-embedding-001"
 
@@ -64,8 +80,10 @@ class Settings(BaseSettings):
     use_xvfb: bool = True
     # How many meetings the bot can be in at the same time (à la Fireflies/Read.ai).
     # Each concurrent bot runs its own Chromium + audio sink, so size this to the
-    # host: roughly 1-1.5 GB RAM and one core per bot is a safe budget.
-    max_concurrent_bots: int = 2
+    # host: roughly 1-1.5 GB RAM and one core per bot is a safe budget, plus ~0.5 GB
+    # of /dev/shm and ~0.5 GB of disk per profile slot (see app/bot/profiles.py).
+    # 6 needs a host with ~8 cores / 16 GB before anything else runs on it.
+    max_concurrent_bots: int = 6
     # Persistent Chromium profile dir. The bot's Google login is stored here, so
     # it stays signed in across runs (sign in once, reuse forever). In prod, put
     # this on a persistent volume / restore it from a secret at startup.
@@ -173,7 +191,7 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_pass: str | None = None
     # RFC 5322 From header. A bare address or a "Name <addr>" pair both work.
-    smtp_from: str = "MeetingMind <no-reply@localhost>"
+    smtp_from: str = "Fennec <no-reply@localhost>"
 
     # Browsers refuse credentialed cross-origin requests to a wildcard origin, so the
     # frontend origins must be listed explicitly. Comma-separated in env.
@@ -240,13 +258,24 @@ class Settings(BaseSettings):
                 "COOKIE_SECURE=false would send session cookies over plain HTTP. Set it to true."
             )
         if self.cookie_samesite.strip().lower() == "none" and not self.cookie_secure:
-            problems.append("COOKIE_SAMESITE=none requires COOKIE_SECURE=true (browsers reject it otherwise).")
+            problems.append(
+                "COOKIE_SAMESITE=none requires COOKIE_SECURE=true (browsers reject it otherwise)."
+            )
         if "*" in self.cors_allow_origins:
-            problems.append("CORS_ALLOW_ORIGINS cannot be '*' — credentialed requests forbid wildcards.")
-        if any(o.startswith("http://") and "localhost" not in o for o in self.cors_allow_origins):
-            problems.append("CORS_ALLOW_ORIGINS contains a non-local http:// origin; use https://.")
+            problems.append(
+                "CORS_ALLOW_ORIGINS cannot be '*' — credentialed requests forbid wildcards."
+            )
+        if any(
+            o.startswith("http://") and "localhost" not in o
+            for o in self.cors_allow_origins
+        ):
+            problems.append(
+                "CORS_ALLOW_ORIGINS contains a non-local http:// origin; use https://."
+            )
         if len(self.secret_key) < 32:
-            problems.append("SECRET_KEY is too short (need >=32 chars). Generate: openssl rand -hex 32")
+            problems.append(
+                "SECRET_KEY is too short (need >=32 chars). Generate: openssl rand -hex 32"
+            )
         if not self.smtp_host:
             problems.append(
                 "SMTP_HOST is unset, so login codes would be written to the log instead of "
@@ -262,6 +291,17 @@ class Settings(BaseSettings):
                 "USE_XVFB=false leaves the headful browser with no display to draw on. "
                 "Set it to true unless a DISPLAY is provided by the host."
             )
+        if not self.gemini_vertex_project and not self.gemini_api_key:
+            problems.append(
+                "Neither GEMINI_VERTEX_PROJECT nor GEMINI_API_KEY is set, so every summary, "
+                "MOM and embedding would fail. Set one."
+            )
+        if self.gemini_vertex_project and self.gemini_vertex_credentials_file:
+            if not Path(self.gemini_vertex_credentials_file).is_file():
+                problems.append(
+                    f"GEMINI_VERTEX_CREDENTIALS_FILE={self.gemini_vertex_credentials_file} does not "
+                    "exist, so no LLM call could authenticate. Check the path and any volume mount."
+                )
 
         if problems:
             raise ValueError(
