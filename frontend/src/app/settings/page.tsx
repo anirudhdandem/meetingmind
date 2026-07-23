@@ -480,7 +480,7 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="Configuration"
         title="Settings"
-        sub="Connection status for the services that make MeetingMind work. Values come from the server's environment."
+        sub="Connection status for the services that make Fennec work. Values come from the server's environment."
       />
 
       {error && <ErrorNote>Couldn’t reach the API: {error}</ErrorNote>}

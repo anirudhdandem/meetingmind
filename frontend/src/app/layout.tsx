@@ -24,7 +24,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MeetingMind — AI Revenue Intelligence",
+  title: "Fennec — AI Meeting Intelligence",
   description:
     "An AI revenue intelligence platform that joins customer meetings, captures decisions, builds persistent account memory, and learns why deals are won or lost.",
 };

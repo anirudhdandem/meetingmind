@@ -26,7 +26,7 @@ class LiveKitPublisher:
         return (
             api.AccessToken(s.livekit_api_key, s.livekit_api_secret)
             .with_identity(BOT_IDENTITY)
-            .with_name("MeetingMind Bot")
+            .with_name("Fennec Bot")
             .with_grants(api.VideoGrants(room_join=True, room=self.room_name))
             .to_jwt()
         )

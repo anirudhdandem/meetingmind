@@ -81,10 +81,10 @@ async def send_login_code(to: str, name: str, code: str, *, ttl_minutes: int) ->
     notification banner without opening the message."""
     await send_email(
         to,
-        f"{code} is your MeetingMind sign-in code",
+        f"{code} is your Fennec sign-in code",
         (
             f"Hi {name},\n\n"
-            f"Your MeetingMind sign-in code is:\n\n"
+            f"Your Fennec sign-in code is:\n\n"
             f"    {code}\n\n"
             f"It expires in {ttl_minutes} minutes and can only be used once.\n\n"
             "If you didn't try to sign in, someone else knows your password. "
@@ -101,10 +101,10 @@ async def send_password_reset_code(to: str, name: str, code: str, *, ttl_minutes
     """
     await send_email(
         to,
-        f"{code} is your MeetingMind password reset code",
+        f"{code} is your Fennec password reset code",
         (
             f"Hi {name},\n\n"
-            f"Someone asked to reset the password on your MeetingMind account. "
+            f"Someone asked to reset the password on your Fennec account. "
             f"Your reset code is:\n\n"
             f"    {code}\n\n"
             f"It expires in {ttl_minutes} minutes and can only be used once.\n\n"

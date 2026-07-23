@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { KeyRound, MailCheck } from "lucide-react";
 
-import { Brand } from "@/components/nav";
+import { BrandLockup } from "@/components/nav";
 import { LOGIN_ROUTE } from "@/components/shell";
 import { Button, Card, ErrorNote, Input } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -31,7 +31,7 @@ export default function ForgotPasswordPage() {
     <div className="flex min-h-screen items-center justify-center px-5 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex justify-center">
-          <Brand />
+          <BrandLockup />
         </div>
         {step === "email" ? (
           <EmailStep

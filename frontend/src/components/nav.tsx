@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -43,22 +44,43 @@ const SECONDARY: Item[] = [
 export function Brand({ dark = false }: { dark?: boolean }) {
   return (
     <Link href="/" className="flex items-center gap-2.5">
-      <span className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#4f46e5] to-[#0e1014] shadow-[0_6px_18px_-6px_rgba(79,70,229,0.6)]">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden className="relative">
-          <circle cx="12" cy="12" r="3.4" fill="#c7d2fe" />
-          <circle cx="12" cy="12" r="8.5" stroke="#a78bfa" strokeWidth="1.3" opacity="0.6" />
-          <circle cx="20" cy="6" r="1.6" fill="#818cf8" />
-          <circle cx="5" cy="18" r="1.3" fill="#c4b5fd" />
-        </svg>
+      {/* The mark's outer arc and eyes are navy, so it needs a light tile to read
+          against the dark sidebar — same tile in both modes keeps the two navs
+          identical. */}
+      <span className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-white shadow-[0_6px_18px_-6px_rgba(15,23,42,0.45)]">
+        {/* unoptimized: the production image has no `sharp`, and Next's optimizer
+            hard-fails without it. A 30px static PNG needs no resizing anyway. */}
+        <Image
+          src="/fennec-mark.png"
+          alt=""
+          width={30}
+          height={30}
+          priority
+          unoptimized
+          className="relative"
+        />
       </span>
       <span className="flex flex-col leading-none">
         <span className={`font-display text-[16px] font-semibold tracking-tight ${dark ? "text-white" : "text-ink"}`}>
-          MeetingMind
+          Fennec
         </span>
-        <span className={`mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.18em] ${dark ? "text-white/40" : "text-faint"}`}>
-          Revenue Intelligence
+        {/* Tighter tracking than the old two-word tagline: at 0.18em this one runs
+            past the 260px sidebar rail. */}
+        <span className={`mt-0.5 whitespace-nowrap font-mono text-[9.5px] uppercase tracking-[0.13em] ${dark ? "text-white/40" : "text-faint"}`}>
+          AI Meeting Intelligence
         </span>
       </span>
+    </Link>
+  );
+}
+
+/** The full logo lockup (mark + wordmark + tagline), for the auth pages where the
+ *  brand is the only thing on screen. Navy artwork on transparency — light frames
+ *  only, which is what the auth shell renders. */
+export function BrandLockup() {
+  return (
+    <Link href="/" aria-label="Fennec">
+      <Image src="/fennec-logo.png" alt="Fennec — AI Meeting Intelligence" width={190} height={186} priority unoptimized />
     </Link>
   );
 }

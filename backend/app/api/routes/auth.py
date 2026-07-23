@@ -148,7 +148,7 @@ def _reject_external_domain(email: str) -> None:
     domains = get_settings().internal_email_domains or []
     if domains and email.rsplit("@", 1)[-1] not in domains:
         raise HTTPException(
-            403, f"MeetingMind accounts are limited to {', '.join('@' + d for d in domains)}"
+            403, f"Fennec accounts are limited to {', '.join('@' + d for d in domains)}"
         )
 
 

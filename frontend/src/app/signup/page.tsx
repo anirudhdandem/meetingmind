@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { CodeStep } from "@/components/code-step";
-import { Brand } from "@/components/nav";
+import { BrandLockup } from "@/components/nav";
 import { LOGIN_ROUTE } from "@/components/shell";
 import { Button, Card, ErrorNote, Input } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -33,7 +33,7 @@ export default function SignupPage() {
     <div className="flex min-h-screen items-center justify-center px-5 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex justify-center">
-          <Brand />
+          <BrandLockup />
         </div>
         {step === "details" ? (
           <DetailsStep
@@ -90,7 +90,7 @@ function DetailsStep({ onDone }: { onDone: (email: string, resendAfter: number) 
         </span>
         <div>
           <h1 className="font-display text-base font-medium text-ink">Create your account</h1>
-          <p className="text-sm text-muted">MeetingMind is restricted to your team&apos;s domain.</p>
+          <p className="text-sm text-muted">Fennec is restricted to your team&apos;s domain.</p>
         </div>
       </header>
 

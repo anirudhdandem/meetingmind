@@ -83,7 +83,7 @@ class PulseAudioCapture:
         self._module_id = await _run(
             "pactl", "load-module", "module-null-sink",
             f"sink_name={self.sink_name}",
-            "sink_properties=device.description=MeetingMind",
+            "sink_properties=device.description=Fennec",
         )
         log.info("PulseAudio sink %s ready (module %s)", self.sink_name, self._module_id)
 

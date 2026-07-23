@@ -1,6 +1,6 @@
 "use client";
 
-/* Motion primitives for MeetingMind — polished transitions + subtle 3D depth.
+/* Motion primitives for Fennec — polished transitions + subtle 3D depth.
    Everything here is client-only and degrades gracefully when the user has
    "reduce motion" enabled. */
 
