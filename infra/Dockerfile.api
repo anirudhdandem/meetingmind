@@ -31,19 +31,25 @@ WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Installs the Chromium build matching the pinned Playwright, plus its shared libs.
-RUN playwright install --with-deps chromium
+# The user comes BEFORE the browser download on purpose. Chromium is ~1.4GB, and a
+# later `chown -R /ms-playwright` would copy every byte of it into a second layer,
+# doubling the image for nothing. Installing as appuser into a pre-owned directory
+# gets the same ownership for free — worth real money on a disk-constrained host.
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /ms-playwright /app/recordings /app/bot_profile /app/bot_profile_slots "$XDG_RUNTIME_DIR" \
+    && chmod 700 "$XDG_RUNTIME_DIR" \
+    && chown -R appuser:appuser /ms-playwright /app "$XDG_RUNTIME_DIR"
 
-COPY backend/ /app/
+# Shared libs are a system-wide apt install and must run as root; the browser itself
+# is a plain download into $PLAYWRIGHT_BROWSERS_PATH, which appuser now owns.
+RUN playwright install-deps chromium
+USER appuser
+RUN playwright install chromium
+USER root
+
+COPY --chown=appuser:appuser backend/ /app/
 COPY infra/entrypoint-api.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Run unprivileged. The mount points are created and chowned here so Docker's named
-# volumes inherit this ownership when they're first populated.
-RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /app/recordings /app/bot_profile /app/bot_profile_slots "$XDG_RUNTIME_DIR" \
-    && chmod 700 "$XDG_RUNTIME_DIR" \
-    && chown -R appuser:appuser /app /ms-playwright "$XDG_RUNTIME_DIR"
 
 USER appuser
 
