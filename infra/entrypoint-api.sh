@@ -11,6 +11,18 @@ mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
 if ! pactl info >/dev/null 2>&1; then
+  # A daemon killed without cleanup — OOM, or the disk filling under it — leaves its
+  # pid file and socket behind, and `pulseaudio --start` then declines to start
+  # because it believes one is already running. Every meeting after that records
+  # silence while the logs look perfectly healthy, so clear the corpse first. Only
+  # reached when no daemon answers, i.e. the files cannot belong to a live one.
+  if [ -e "$XDG_RUNTIME_DIR/pulse/pid" ] || [ -e "$XDG_RUNTIME_DIR/pulse/native" ]; then
+    echo "[entrypoint] clearing stale PulseAudio state (no daemon is answering)"
+    pkill -x pulseaudio 2>/dev/null || true
+    sleep 1
+    rm -f "$XDG_RUNTIME_DIR/pulse/pid" "$XDG_RUNTIME_DIR/pulse/native"
+  fi
+
   echo "[entrypoint] starting PulseAudio"
   # --exit-idle-time=-1: never self-terminate between meetings.
   pulseaudio --start --exit-idle-time=-1 --disallow-exit >/dev/null 2>&1 || true
